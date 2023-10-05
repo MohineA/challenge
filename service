@@ -1,0 +1,180 @@
+<?php,
+// defined function to remove bom - byte order mark. Removed from columns variable
+function remove_bom($columns) {
+  // iterate through each element of column
+  foreach($columns as $key => $val) {
+    // converts bom representation to binary and stores it in $bom 
+    $bom = pack('H*','EFBBBF');
+    // replace bom if at beggining of sttring with empty string, removing bom
+    $val = preg_replace("/^$bom/", '', $val);
+    //update element with removed bom
+    $columns[$key] = $val;
+  }
+  // return columns
+  return $columns;
+}
+?>
+
+
+
+
+
+
+
+  
+<?php
+// function to insert new service entry into csv file: $file_path = path to csv file, $params = containing service details
+function insert_service($params, $file_path) {
+  //open csv and append
+  $services_file = fopen($file_path, "a");
+
+  $data_to_write = [$params["Ref"], $params["Centre"], $params["Service"], $params["Country"]];
+  // edit csv file
+  fputcsv($services_file, $data_to_write);
+  // close csv file and return true when complete
+  fclose($services_file);
+  return true;
+}
+// function to update csv file with service data
+function update_service($data_to_write, $columns, $file_path) {
+  $write_file_path = "../tmp_services.csv";
+  $write_file = fopen($write_file_path, "w");
+  // edit csv with updated data, writing column names and each row (iterated through rows) to the csv
+  fputcsv($write_file, $columns);
+  foreach($data_to_write as $row) {
+    fputcsv($write_file, $row);
+  }
+  // close file
+  fclose($write_file);
+
+  // removes old file and replaces with new file and return true once completed
+  unlink($file_path);
+  rename($write_file_path, $file_path);
+  return true;
+}
+
+// function checks if rquired parameters are present in input data
+function valid_params($params) {
+  // if loop validates if keys exist in param variable
+  if (
+    !array_key_exists("Country", $params) ||
+    !array_key_exists("Ref", $params) ||
+    !array_key_exists("Service", $params) ||
+    !array_key_exists("Centre", $params)
+  ) {
+    // if any key is missing http returns 400 and false otherwise true
+    http_response_code(400);
+    return false;
+  }
+  return true;
+}
+
+// functions updates or inserts data depending on input, param = variable, file_path = csv path
+function upsert_service($params, $file_path) {
+  // checking valdiity of input parameters, if invalid returns false
+  if (!valid_params($params)){
+    return false;
+  }
+  // open csv in read mode and get first row of column
+  $services_file = fopen($file_path, "r");
+  $columns = fgetcsv($services_file, null);
+  // remove bom from columns if there are any
+  $columns = remove_bom($columns);
+  
+  // iterate through data and see if service with the same paramters exists, if found updates service / inserts a new service. return TRUE if update/insertion is sccessfull
+  $i = 0;
+  $found = false;
+  while (($data = fgetcsv($services_file, null)) !== FALSE) {
+    if ($data[0] == $params["Ref"]) {
+      $found = TRUE;
+      $data_to_write[$i] = [
+        $data[0],
+        htmlspecialchars($params["Centre"]),
+        htmlspecialchars($params["Service"]),
+        htmlspecialchars($params["Country"]),
+      ];
+     // if there is no match the original data set is given back 
+    } else {
+      $data_to_write[$i] = $data;
+    }
+    // loop increments data_to_write variable
+    $i++;
+  }
+  // close file
+  fclose($services_file);
+  // if found return updated service function to return updated data 
+  if ($found == TRUE) {
+    return update_service($data_to_write, $columns, $file_path);
+  } else {
+  // function to return new service entry again
+    return insert_service($params, $file_path);
+  }
+}
+?>
+
+
+
+
+
+
+
+
+<?php
+//include files needed (contains files needed for functions and other utilities)
+include "./utils.php";
+include "./get_service.php";
+include "./upsert_service.php";
+// storing CSV file path
+$file_path = "/data/services.csv";
+// extract data based on two letter country code [a-z] using GET, use get_service function to return service data based on country code
+if (preg_match('/^\/services\/([a-z]{2})$/i', $_SERVER["REQUEST_URI"], $params) && $_SERVER['REQUEST_METHOD'] == "GET") {
+  header("Content-Type: application/json");
+  echo get_service($params[1], $file_path);
+// updating or inserting service using POST 
+} else if (preg_match('/^\/services$/i', $_SERVER["REQUEST_URI"], $params) && $_SERVER['REQUEST_METHOD'] == "POST") {
+  echo upsert_service($_POST, $file_path);
+} else {
+// if nothing found return 404 error
+  http_response_code(404);
+}
+?>
+
+
+
+
+
+
+
+
+
+<?php
+// define get_service function 
+function get_service($country_code, $file_path) {
+  // open CSV file defined by file_path in read mode
+  $services_file = fopen($file_path, "r");
+  // read first row of file of column names and return as column
+  $columns = fgetcsv($services_file, null);
+  // removes bom in columns
+  $columns = remove_bom($columns);
+  // loop through the columns and see if the country_code matches
+  while (($data = fgetcsv($services_file, null)) !== FALSE) {
+    if ($data[3] == $country_code) {
+      // prepare data for JSON
+      $data_out[$columns[0]] = $data[0];
+      $data_out[$columns[1]] = $data[1];
+      $data_out[$columns[2]] = $data[2];
+      $data_out[$columns[3]] = $data[3];
+      // closing the file to return as JSON object
+      fclose($services_file);
+      return json_encode($data_out);;
+    }
+  }
+  // close the file if the loop completes wihtout finding a match
+  fclose($services_file);
+  // show error message and set http message as 404 code - not found
+  $error["error"] = "Service not found";
+  http_response_code(404);
+  // return JSON file
+  return json_encode($error);
+}
+?>
